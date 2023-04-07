@@ -16,47 +16,53 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
 
 const (
-	exitFlag = "exit"
+	exitFlag = "exit" // exit flag, if you input this, the program will exit
 )
 
 var (
-	apiKey         string
-	organizationID string
+	apiKey         string // your openAI api key
+	organizationID string // your organization id, if you don't have one, you can use the empty string
 
-	mode      int
-	proxyPort int
-	imageDir  string
+	mode      int    // program mode, 0: chat with context; 1: chat no context; 2: image generator
+	proxyPort int    // your proxy port, vpn is required if you are in China
+	imageDir  string // generated image dir, default is ./images
 
 	c *openai.Client
 )
 
 func main() {
+	// parse command line arguments
 	flag.StringVar(&apiKey, "k", "", "your openAI api key")
 	flag.StringVar(&organizationID, "o", "", "your organization id")
 	flag.IntVar(&proxyPort, "p", 7890, "your proxy port")
-	flag.IntVar(&mode, "m", 0, "program mode, 0: chat; 1: image generator")
+	flag.IntVar(&mode, "m", 0, "program mode, 0: chat with context; 1: chat no context; 2: image generator")
 	flag.StringVar(&imageDir, "d", "./images", "generated image dir")
 	flag.Parse()
+	// check arguments
 	proxyURL, err := url.Parse(fmt.Sprintf("http://localhost:%d", proxyPort))
 	if err != nil {
 		panic(err)
 	}
+	// create client by config
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.HTTPClient = &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
+			Proxy: http.ProxyURL(proxyURL), // use proxy
 		},
 	}
 	c = openai.NewClientWithConfig(cfg)
 	ctx := context.Background()
-
+	messages := make([]openai.ChatCompletionMessage, 0)
+	// create a scanner to read user input
 	scanner := bufio.NewScanner(os.Stdin)
+	// main loop
 	for {
 		fmt.Print("You: ")
 		scanner.Scan()
@@ -65,15 +71,29 @@ func main() {
 			break
 		}
 		fmt.Println(">")
+		singleMsg := openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: text,
+		}
+		messages = append(messages, singleMsg)
 		switch mode {
 		case 0:
-			if err := chatStream(ctx, text); err != nil {
-				panic(err)
+			messages, err = chatStream(ctx, messages)
+			if err != nil {
+				fmt.Println("chat error: ", err)
+				continue
 			}
 
 		case 1:
+			if _, err := chatStream(ctx, []openai.ChatCompletionMessage{singleMsg}); err != nil {
+				fmt.Println("chat error: ", err)
+				continue
+			}
+
+		case 2:
 			if err := imageGen(ctx, text); err != nil {
-				panic(err)
+				fmt.Println("generate image error: ", err)
+				continue
 			}
 		default:
 			return
@@ -83,41 +103,43 @@ func main() {
 	}
 }
 
-func chatStream(ctx context.Context, content string) error {
+// chatStream chat with context, if you want to chat without context, just pass a single message.
+func chatStream(ctx context.Context, messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, error) {
 	req := openai.ChatCompletionRequest{
-		Model: openai.GPT3Dot5Turbo,
-		// MaxTokens: 2000,
-		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: content,
-			},
-		},
-		Stream: true,
+		Model:    openai.GPT3Dot5Turbo,
+		Messages: messages,
+		Stream:   true,
 	}
 	stream, err := c.CreateChatCompletionStream(ctx, req)
 	if err != nil {
 		fmt.Printf("ChatCompletionStream error: %v\n", err)
-		return err
+		return messages, err
 	}
 	defer stream.Close()
-
+	var builder strings.Builder
 	fmt.Printf("GPT: ")
 	for {
 		response, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
-			return nil
+			break
 		}
 
 		if err != nil {
 			fmt.Printf("\nStream error: %v\n", err)
-			return err
+			return messages, err
 		}
 
 		fmt.Printf(response.Choices[0].Delta.Content)
+		builder.WriteString(response.Choices[0].Delta.Content)
 	}
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleAssistant,
+		Content: builder.String(),
+	})
+	return messages, nil
 }
 
+// imageGen generate image with prompt, the prompt can be a sentence or a paragraph.
 func imageGen(ctx context.Context, prompt string) error {
 	reqBase64 := openai.ImageRequest{
 		Prompt:         prompt,
@@ -167,10 +189,12 @@ func imageGen(ctx context.Context, prompt string) error {
 	return nil
 }
 
+// md5Str generate md5 string, the input string will be converted to []byte.
 func md5Str(s string) string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(s)))
 }
 
+// pathExists check if the file or directory exists, if exists, return true, otherwise return false.
 func pathExists(p string) bool {
 	// Check if the file or directory exists
 	_, err := os.Stat(p)
