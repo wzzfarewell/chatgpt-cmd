@@ -1,0 +1,45 @@
+version: '3'
+
+# 定义全局变量，可以在任何task中使用
+env:
+  BINARY_NAME_PREFIX: bin/chatgpt-cmd
+
+tasks:
+  build:
+    vars:
+      TARGETS: windows/amd64 windows/arm linux/amd64 linux/arm darwin/amd64
+      GIT_COMMIT: 
+        sh: git rev-parse --short=8 HEAD
+    cmds:
+      - echo '{{OS}} {{ARCH}} {{exeExt}}'
+      - echo {{now | date "2006-01-02"}}
+      - echo $BINARY_NAME_PREFIX
+      - echo {{.GIT_COMMIT}}
+      - |
+        {{range $i, $item := .TARGETS | splitList " "}}
+          echo {{if eq OS "windows"}}$BINARY_NAME_PREFIX-{{$item | replace "/" "-"}}.exe{{else}}$BINARY_NAME_PREFIX-{{$item | replace "/" "-"}}{{end}}
+        {{end}}
+      - 
+      # - BINARY_NAME=bin/chatgpt-cmd
+      # - GOBUILD=`go build`
+      # - echo $TARGETS
+      # - GOFLAGS=-ldflags="-s -w"
+      # - |
+      #   for target in $TARGETS; do
+      #     os=${target%/*}
+      #     arch=${target#*/}
+      #     if [ $os = "windows" ]; then
+      #       GOOS=$os GOARCH=$arch $GOBUILD $GOFLAGS -o $BINARY_NAME-$os-$arch.exe
+      #     else
+      #       GOOS=$os GOARCH=$arch $GOBUILD $GOFLAGS -o $BINARY_NAME-$os-$arch
+      #     fi
+      #   done
+    generates: # generates can be files or file patterns. When given, Task will compare the checksum of the source files to determine if it's necessary to run the task. If not, it will just print a message like Task "js" is up to date.
+      - bin/chatgpt-cmd-darwin-amd64
+      - bin/chatgpt-cmd-linux-amd64
+      - bin/chatgpt-cmd-linux-arm
+      - bin/chatgpt-cmd-windows-amd64.exe
+      - bin/chatgpt-cmd-windows-arm.exe
+  clean:
+    cmds:
+      - rm -f bin/chatgpt-cmd-*
